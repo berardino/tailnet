@@ -1,0 +1,11 @@
+[package]
+name = "tailnet"
+version = "0.1.0"
+authors = ["Berardino la Torre <berardino.latorre@gmail.com>"]
+
+[dependencies]
+libc = "0.2"
+
+
+[build-dependencies]
+bindgen = "*"
