@@ -11,26 +11,11 @@ use std::net::SocketAddrV4;
 use std::net::SocketAddrV6;
 use std::os::raw::c_char;
 use std::ptr;
-use libc::{ sockaddr, sockaddr_in, c_int, AF_INET, AF_INET6 };
+use libc::{sockaddr, sockaddr_in, c_int, AF_INET, AF_INET6};
+use std::ffi::CString;
+
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-
-
-
-#[derive(Debug)]
-pub struct NetworkAddr {
-    pub addr: SocketAddr,
-    pub netmask: Option<SocketAddr>,
-    pub broadaddr: Option<SocketAddr>,
-    pub dstaddr: Option<SocketAddr>,
-}
-
-#[derive(Debug)]
-pub struct NetworkDevice {
-    pub name: String,
-    pub description: Option<String>,
-    pub addresses: Vec<NetworkAddr>,
-}
 
 fn cstr_to_string(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
@@ -65,13 +50,13 @@ unsafe fn sockaddr_to_socketaddress(sa: *mut sockaddr) -> Result<SocketAddr, Str
     }
 }
 
-unsafe fn parse_pcap_addr_t(addrs: *mut pcap_addr_t) -> Vec<NetworkAddr> {
+unsafe fn parse_pcap_addr_t(addrs: *mut pcap_addr_t) -> Vec<Address> {
     let mut addresses = Vec::new();
     let mut it = addrs;
     while !it.is_null() {
         let curr_addr = *it;
         sockaddr_to_socketaddress(curr_addr.addr).ok().map(|addr|
-            addresses.push(NetworkAddr {
+            addresses.push(Address {
                 addr,
                 netmask: sockaddr_to_socketaddress(curr_addr.netmask).ok(),
                 broadaddr: sockaddr_to_socketaddress(curr_addr.broadaddr).ok(),
@@ -83,12 +68,12 @@ unsafe fn parse_pcap_addr_t(addrs: *mut pcap_addr_t) -> Vec<NetworkAddr> {
     addresses
 }
 
-unsafe fn parse_pcap_if_t(devs: *mut pcap_if_t) -> Vec<NetworkDevice> {
+unsafe fn parse_pcap_if_t(devs: *mut pcap_if_t) -> Vec<Device> {
     let mut devices = Vec::new();
     let mut it = devs;
     while !it.is_null() {
         let curr = &*it;
-        let device = NetworkDevice {
+        let device = Device {
             name: cstr_to_string(curr.name).unwrap(),
             description: cstr_to_string(curr.description),
             addresses: parse_pcap_addr_t(curr.addresses),
@@ -99,22 +84,70 @@ unsafe fn parse_pcap_if_t(devs: *mut pcap_if_t) -> Vec<NetworkDevice> {
     devices
 }
 
-fn _pcap_findalldevs() -> Vec<NetworkDevice> {
-    let mut devs: *mut pcap_if_t = ptr::null_mut();
-    let mut err = [0i8; 256];
-    unsafe {
-        pcap_findalldevs(&mut devs, err.as_mut_ptr());
-        return parse_pcap_if_t(devs);
+#[derive(Debug)]
+pub struct Address {
+    pub addr: SocketAddr,
+    pub netmask: Option<SocketAddr>,
+    pub broadaddr: Option<SocketAddr>,
+    pub dstaddr: Option<SocketAddr>,
+}
+
+#[derive(Debug)]
+pub struct Device {
+    pub name: String,
+    pub description: Option<String>,
+    pub addresses: Vec<Address>,
+}
+
+pub struct PacketCapture {
+    handle: *mut pcap_t
+}
+
+impl PacketCapture {
+    fn new(dev: Device) -> PacketCapture {
+        let mut err = [0i8; PCAP_ERRBUF_SIZE as usize];
+        unsafe {
+            let handle = pcap_create(CString::new(dev.name).unwrap().as_ptr(), err.as_mut_ptr());
+            PacketCapture {
+                handle
+            }
+        }
+    }
+
+    fn activate(self) {
+        unsafe {
+            pcap_activate(self.handle);
+        }
     }
 }
 
+impl Drop for PacketCapture {
+    fn drop(&mut self) {
+        unsafe {
+            pcap_close(self.handle);
+        }
+    }
+}
+
+fn _pcap_findalldevs() -> Vec<Device> {
+    let mut devs: *mut pcap_if_t = ptr::null_mut();
+    let mut err = [0i8; PCAP_ERRBUF_SIZE as usize];
+    unsafe {
+        pcap_findalldevs(&mut devs, err.as_mut_ptr());
+        let devices = parse_pcap_if_t(devs);
+        pcap_freealldevs(devs);
+        return devices;
+    };
+}
+
+fn _pcap_dispatch() {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn pcap_findalldevs_works() {
         _pcap_findalldevs().iter().for_each(|d| println!("{:#?}", d));
-        assert_eq!(2 + 2, 4);
     }
 }
